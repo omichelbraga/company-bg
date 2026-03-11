@@ -1,31 +1,47 @@
 """
 Photo Background Replacement Microservice
-- POST /process-image/ (Bearer auth, rate-limited by email)
-- Accepts: file upload OR image_url, plus name + email fields
-- Returns: JSON with URLs to 14 generated images
-- Images stored in out_images/{email_username}/ — auto-deleted after 5 min
+- POST /process-image/ (Bearer auth, rate-limited by email) → returns job_id
+- GET /status/{job_id} (Bearer auth) → poll for results
+- GET /backgrounds → list available backgrounds
+- GET /health → service health
+- Images stored in out_images/{email_username}/ — auto-cleaned by APScheduler
 """
 
+import logging
 import os
 import stat
-import time
 import shutil
+import uuid
 import urllib.parse
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta
 from io import BytesIO
+from threading import Lock
 
 import requests as http_requests
+from apscheduler.schedulers.background import BackgroundScheduler
 from dotenv import load_dotenv
-from fastapi import (
-    BackgroundTasks, Depends, FastAPI, File, Form, HTTPException, UploadFile
-)
+from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from fastapi.staticfiles import StaticFiles
-
-from processor import load_backgrounds, detect_face, remove_background, build_portrait, composite_on_background
 from PIL import Image
+
+from processor import (
+    load_backgrounds,
+    detect_face,
+    remove_background,
+    build_portrait,
+    composite_on_background,
+)
+
+# ── Logging ──────────────────────────────────────────────────────────────────
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(message)s",
+)
+logger = logging.getLogger(__name__)
 
 load_dotenv()
 
@@ -39,64 +55,127 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# ── Config ────────────────────────────────────────────────────────────────────
+# ── Config ───────────────────────────────────────────────────────────────────
 BACKGROUND_DIR = "backgrounds/"
 OUTPUT_DIR = "out_images/"
 MAX_FILE_SIZE_BYTES = 10 * 1024 * 1024  # 10 MB
 ALLOWED_EXTENSIONS = {".jpg", ".jpeg", ".png"}
-CLEANUP_DELAY_SECONDS = 300  # 5 minutes
+CLEANUP_AGE_SECONDS = 300  # 5 minutes
 
 MAX_REQUESTS = 5
 TIME_WINDOW = timedelta(minutes=1)
 
 TOKEN = os.getenv("TOKEN")
 
-# ── Startup ───────────────────────────────────────────────────────────────────
+JOB_EXPIRY_SECONDS = 600  # 10 minutes
+
+# ── State ────────────────────────────────────────────────────────────────────
 backgrounds: list = []
+jobs: dict = {}
+jobs_lock = Lock()
+rate_limit_store: dict = {}
+executor = ThreadPoolExecutor(max_workers=4)
 
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 app.mount("/images", StaticFiles(directory=OUTPUT_DIR), name="images")
 
+# ── APScheduler ──────────────────────────────────────────────────────────────
+scheduler = BackgroundScheduler()
+
+
+def cleanup_old_output_folders():
+    """Delete subfolders in out_images/ older than 5 minutes."""
+    now = datetime.now().timestamp()
+    deleted = 0
+    try:
+        for entry in os.scandir(OUTPUT_DIR):
+            if entry.is_dir():
+                age = now - entry.stat().st_mtime
+                if age > CLEANUP_AGE_SECONDS:
+                    for root, _dirs, files in os.walk(entry.path):
+                        for f in files:
+                            os.chmod(os.path.join(root, f), stat.S_IWRITE)
+                    shutil.rmtree(entry.path)
+                    deleted += 1
+    except Exception as e:
+        logger.error(f"Cleanup error: {e}")
+    if deleted:
+        logger.info(f"Cleanup: removed {deleted} expired output folder(s)")
+
+
+def cleanup_expired_jobs():
+    """Remove jobs older than JOB_EXPIRY_SECONDS from memory."""
+    now = datetime.now()
+    expired = []
+    with jobs_lock:
+        for job_id, job in jobs.items():
+            if (now - job["created_at"]).total_seconds() > JOB_EXPIRY_SECONDS:
+                expired.append(job_id)
+        for job_id in expired:
+            del jobs[job_id]
+    if expired:
+        logger.info(f"Cleanup: expired {len(expired)} job(s) from memory")
+
+
+scheduler.add_job(cleanup_old_output_folders, "interval", minutes=5)
+scheduler.add_job(cleanup_expired_jobs, "interval", minutes=5)
+
+
+# ── Startup / Shutdown ───────────────────────────────────────────────────────
 @app.on_event("startup")
 async def startup():
     global backgrounds
     backgrounds = load_backgrounds(BACKGROUND_DIR)
-    print(f"Loaded {len(backgrounds)} backgrounds")
+    logger.info(f"Loaded {len(backgrounds)} backgrounds")
+    scheduler.start()
+    logger.info("APScheduler started (cleanup every 5 min)")
 
-# ── Auth ──────────────────────────────────────────────────────────────────────
+
+@app.on_event("shutdown")
+async def shutdown():
+    scheduler.shutdown(wait=False)
+    executor.shutdown(wait=False)
+    logger.info("Scheduler and executor shut down")
+
+
+# ── Auth ─────────────────────────────────────────────────────────────────────
 security = HTTPBearer()
+
 
 def authorize(credentials: HTTPAuthorizationCredentials = Depends(security)):
     if credentials.credentials != TOKEN:
         raise HTTPException(status_code=401, detail="Unauthorized. Invalid token.")
 
-# ── Rate limiting ─────────────────────────────────────────────────────────────
-rate_limit_store: dict = {}
 
+# ── Rate limiting ────────────────────────────────────────────────────────────
 def check_rate_limit(email: str) -> bool:
     now = datetime.now()
     if email not in rate_limit_store:
         rate_limit_store[email] = []
-    rate_limit_store[email] = [t for t in rate_limit_store[email] if now - t < TIME_WINDOW]
+    rate_limit_store[email] = [
+        t for t in rate_limit_store[email] if now - t < TIME_WINDOW
+    ]
     if len(rate_limit_store[email]) >= MAX_REQUESTS:
         return False
     rate_limit_store[email].append(now)
     return True
 
-# ── Cleanup ───────────────────────────────────────────────────────────────────
-def delete_folder_after_delay(folder_path: str, delay: int = CLEANUP_DELAY_SECONDS):
-    time.sleep(delay)
-    try:
-        if os.path.exists(folder_path):
-            for root, dirs, files in os.walk(folder_path):
-                for f in files:
-                    os.chmod(os.path.join(root, f), stat.S_IWRITE)
-            shutil.rmtree(folder_path)
-            print(f"Cleaned up: {folder_path}")
-    except Exception as e:
-        print(f"Cleanup error: {e}")
 
-# ── Helpers ───────────────────────────────────────────────────────────────────
+# ── Request ID middleware ────────────────────────────────────────────────────
+@app.middleware("http")
+async def add_request_id(request: Request, call_next):
+    request_id = uuid.uuid4().hex[:8]
+    request.state.request_id = request_id
+    response = await call_next(request)
+    response.headers["X-Request-ID"] = request_id
+    return response
+
+
+# ── Helpers ──────────────────────────────────────────────────────────────────
+def _short_id() -> str:
+    return uuid.uuid4().hex[:8]
+
+
 async def download_image_from_url(image_url: str) -> BytesIO:
     headers = {"User-Agent": "Mozilla/5.0"}
     try:
@@ -104,48 +183,39 @@ async def download_image_from_url(image_url: str) -> BytesIO:
         r.raise_for_status()
         return BytesIO(r.content)
     except http_requests.RequestException as e:
-        raise HTTPException(status_code=400, detail=f"Error downloading image: {str(e)}")
+        raise HTTPException(
+            status_code=400, detail=f"Error downloading image: {str(e)}"
+        )
 
-# ── Main endpoint ─────────────────────────────────────────────────────────────
-@app.post("/process-image/", dependencies=[Depends(authorize)])
-async def process_image(
-    background_tasks: BackgroundTasks,
-    file: UploadFile = File(None),
-    image_url: str = Form(None),
-    name: str = Form(...),
-    email: str = Form(...),
-):
-    # Rate limit
-    if not check_rate_limit(email):
-        raise HTTPException(status_code=429, detail="Rate limit exceeded. Max 5 requests/minute per email.")
 
-    # Validate input
-    if not file and not image_url:
-        return JSONResponse(status_code=400, content={"message": "Provide either a file or image_url."})
+# ── Background job worker ───────────────────────────────────────────────────
+def _process_job(job_id: str, raw: bytes, name: str, email: str):
+    """Run the heavy processing pipeline in a thread."""
+    with jobs_lock:
+        jobs[job_id]["status"] = "processing"
+    logger.info(f"Job {job_id} started processing")
 
     try:
-        # ── Load image bytes ───────────────────────────────────────────────────
-        if file:
-            ext = os.path.splitext(file.filename)[1].lower()
-            if ext not in ALLOWED_EXTENSIONS:
-                return JSONResponse(status_code=400, content={"message": "Invalid file type. Use JPG or PNG."})
-            raw = await file.read()
-            if len(raw) > MAX_FILE_SIZE_BYTES:
-                return JSONResponse(status_code=400, content={"message": f"File too large. Max 10 MB."})
-        else:
-            encoded_url = urllib.parse.quote(image_url, safe=":/")
-            stream = await download_image_from_url(encoded_url)
-            raw = stream.read()
-
-        # ── Process using our pipeline ────────────────────────────────────────
         image = Image.open(BytesIO(raw)).convert("RGB")
+
+        # Face detection BEFORE the heavy model
         face = detect_face(image)
+        if face is None:
+            with jobs_lock:
+                jobs[job_id]["status"] = "failed"
+                jobs[job_id]["error"] = (
+                    "No face detected in the provided image. "
+                    "Please upload a clear photo of a person."
+                )
+            logger.warning(f"Job {job_id} failed: no face detected")
+            return
+
         cutout = remove_background(image)
 
         bg_w, bg_h = backgrounds[0].size
         portrait = build_portrait(cutout, face, bg_w, bg_h)
 
-        # ── Save outputs ──────────────────────────────────────────────────────
+        # Save outputs
         first_last = name.replace(" ", "")
         email_slug = email.split("@")[0]
         user_dir = os.path.join(OUTPUT_DIR, email_slug)
@@ -159,23 +229,153 @@ async def process_image(
             result.convert("RGB").save(filepath, format="PNG")
             image_urls.append(f"/images/{email_slug}/{filename}")
 
-        # Schedule cleanup after 5 minutes
-        background_tasks.add_task(delete_folder_after_delay, user_dir, CLEANUP_DELAY_SECONDS)
+        with jobs_lock:
+            jobs[job_id]["status"] = "done"
+            jobs[job_id]["image_urls"] = image_urls
 
-        return JSONResponse(status_code=200, content={
-            "message": "Images processed successfully",
-            "image_urls": image_urls
-        })
+        logger.info(f"Job {job_id} completed — {len(image_urls)} images")
 
     except Exception as e:
-        return JSONResponse(status_code=500, content={"message": f"Error: {str(e)}"})
+        with jobs_lock:
+            jobs[job_id]["status"] = "failed"
+            jobs[job_id]["error"] = str(e)
+        logger.error(f"Job {job_id} failed: {e}")
 
 
+# ── POST /process-image/ ────────────────────────────────────────────────────
+@app.post("/process-image/", dependencies=[Depends(authorize)])
+async def process_image(
+    request: Request,
+    file: UploadFile = File(None),
+    image_url: str = Form(None),
+    name: str = Form(...),
+    email: str = Form(...),
+):
+    request_id = request.state.request_id
+
+    # Rate limit
+    if not check_rate_limit(email):
+        raise HTTPException(
+            status_code=429,
+            detail="Rate limit exceeded. Max 5 requests/minute per email.",
+        )
+
+    # Validate input
+    if not file and not image_url:
+        return JSONResponse(
+            status_code=400,
+            content={
+                "request_id": request_id,
+                "message": "Provide either a file or image_url.",
+            },
+        )
+
+    # Read image bytes
+    if file:
+        ext = os.path.splitext(file.filename)[1].lower()
+        if ext not in ALLOWED_EXTENSIONS:
+            return JSONResponse(
+                status_code=400,
+                content={
+                    "request_id": request_id,
+                    "message": "Invalid file type. Use JPG or PNG.",
+                },
+            )
+        raw = await file.read()
+        if len(raw) > MAX_FILE_SIZE_BYTES:
+            return JSONResponse(
+                status_code=400,
+                content={
+                    "request_id": request_id,
+                    "message": "File too large. Max 10 MB.",
+                },
+            )
+    else:
+        encoded_url = urllib.parse.quote(image_url, safe=":/")
+        stream = await download_image_from_url(encoded_url)
+        raw = stream.read()
+
+    # Create job
+    job_id = str(uuid.uuid4())
+    with jobs_lock:
+        jobs[job_id] = {
+            "status": "queued",
+            "created_at": datetime.now(),
+            "image_urls": None,
+            "error": None,
+        }
+
+    logger.info(f"Job {job_id} created (email={email})")
+
+    # Submit to thread pool
+    executor.submit(_process_job, job_id, raw, name, email)
+
+    return JSONResponse(
+        status_code=202,
+        content={
+            "request_id": request_id,
+            "job_id": job_id,
+            "status": "queued",
+        },
+    )
+
+
+# ── GET /status/{job_id} ────────────────────────────────────────────────────
+@app.get("/status/{job_id}", dependencies=[Depends(authorize)])
+async def get_job_status(job_id: str, request: Request):
+    request_id = request.state.request_id
+
+    with jobs_lock:
+        job = jobs.get(job_id)
+
+    if job is None:
+        raise HTTPException(status_code=404, detail="Job not found or expired.")
+
+    response = {
+        "request_id": request_id,
+        "job_id": job_id,
+        "status": job["status"],
+    }
+    if job["status"] == "done":
+        response["image_urls"] = job["image_urls"]
+    if job["status"] == "failed":
+        response["error"] = job["error"]
+
+    return JSONResponse(content=response)
+
+
+# ── GET /backgrounds ─────────────────────────────────────────────────────────
+@app.get("/backgrounds")
+async def list_backgrounds(request: Request):
+    request_id = request.state.request_id
+    bg_names = [f"bg{i}" for i in range(1, len(backgrounds) + 1)]
+    return JSONResponse(
+        content={
+            "request_id": request_id,
+            "count": len(backgrounds),
+            "backgrounds": bg_names,
+        }
+    )
+
+
+# ── GET /health ──────────────────────────────────────────────────────────────
 @app.get("/health")
-async def health():
-    return {"status": "ok", "backgrounds_loaded": len(backgrounds)}
+async def health(request: Request):
+    request_id = request.state.request_id
+    with jobs_lock:
+        job_count = len(jobs)
+    return JSONResponse(
+        content={
+            "request_id": request_id,
+            "status": "ok",
+            "backgrounds_loaded": len(backgrounds),
+            "model": "birefnet-portrait",
+            "jobs_in_memory": job_count,
+        }
+    )
 
 
 if __name__ == "__main__":
     import uvicorn
+
     uvicorn.run(app, host="0.0.0.0", port=8001)

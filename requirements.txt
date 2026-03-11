@@ -6,3 +6,6 @@ mediapipe
 Pillow
 python-multipart
 numpy
+apscheduler
+python-dotenv
+requests
