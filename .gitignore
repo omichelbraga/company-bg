@@ -1,0 +1,25 @@
+# Environment
+.env
+
+# Virtual environment
+venv/
+__pycache__/
+*.pyc
+*.pyo
+
+# Generated outputs (auto-cleaned)
+out_images/
+
+# Background images (add your own)
+backgrounds/
+
+# AI model cache
+~/.u2net/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Test artifacts
+*.zip
+agents/
