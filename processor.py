@@ -15,14 +15,15 @@ _REMBG_SESSION = new_session("birefnet-portrait")
 
 
 def load_backgrounds(bg_dir: str = "./backgrounds") -> list[Image.Image]:
-    """Load all background images from the backgrounds directory at startup."""
+    """Load all PNG images from the backgrounds directory at startup.
+
+    Accepts any filename — sorted alphabetically. Just drop PNGs in the folder.
+    """
     bg_path = Path(bg_dir)
     backgrounds: list[Image.Image] = []
-    for i in range(1, 15):
-        filepath = bg_path / f"bg{i}.png"
-        if filepath.exists():
-            bg = Image.open(filepath).convert("RGBA")
-            backgrounds.append(bg)
+    for filepath in sorted(bg_path.glob("*.png")):
+        bg = Image.open(filepath).convert("RGBA")
+        backgrounds.append(bg)
     return backgrounds
 
 
