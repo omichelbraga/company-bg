@@ -10,9 +10,6 @@ __pycache__/
 # Generated outputs (auto-cleaned)
 out_images/
 
-# Background images (add your own)
-backgrounds/
-
 # AI model cache
 ~/.u2net/
 
