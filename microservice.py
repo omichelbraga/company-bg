@@ -7,6 +7,7 @@ Photo Background Replacement Microservice
 - Images stored in out_images/{email_username}/ — auto-cleaned by APScheduler
 """
 
+import gc
 import logging
 import os
 import stat
@@ -243,6 +244,10 @@ def _process_job(job_id: str, raw: bytes, name: str, email: str):
             jobs[job_id]["status"] = "failed"
             jobs[job_id]["error"] = str(e)
         logger.error(f"Job {job_id} failed: {e}")
+
+    finally:
+        # Force GC after each job — birefnet leaves large arrays in memory
+        gc.collect()
 
 
 # ── POST /process-image/ ────────────────────────────────────────────────────
