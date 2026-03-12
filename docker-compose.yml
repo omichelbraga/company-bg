@@ -12,6 +12,7 @@ services:
       - RATE_LIMIT_MAX_REQUESTS=${RATE_LIMIT_MAX_REQUESTS:-5}
       - RATE_LIMIT_WINDOW_MINUTES=${RATE_LIMIT_WINDOW_MINUTES:-1}
       - JOB_EXPIRY_MINUTES=${JOB_EXPIRY_MINUTES:-10}
+      - REMBG_MODEL=${REMBG_MODEL:-birefnet-portrait}
     volumes:
       # Generated output images (auto-cleaned by APScheduler)
       - company-bg-output:/app/out_images

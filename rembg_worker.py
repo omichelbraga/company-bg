@@ -4,6 +4,7 @@ Run as: python rembg_worker.py <input_png_path> <output_png_path>
 
 Runs in its own process so a segfault in onnxruntime cannot kill uvicorn.
 """
+import os
 import sys
 from PIL import Image
 from rembg import new_session, remove
@@ -17,7 +18,8 @@ def main():
     input_path = sys.argv[1]
     output_path = sys.argv[2]
 
-    session = new_session("birefnet-portrait", providers=["CPUExecutionProvider"])
+    model = os.environ.get("REMBG_MODEL", "birefnet-portrait")
+    session = new_session(model, providers=["CPUExecutionProvider"])
 
     img = Image.open(input_path).convert("RGB")
     buf = io.BytesIO()

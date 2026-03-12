@@ -19,7 +19,9 @@ COPY backgrounds/ ./backgrounds/
 
 # Pre-download the birefnet-portrait model at build time (~973MB)
 # Avoids first-request download race condition in production
-RUN python3 -c "from rembg import new_session; new_session('birefnet-portrait', providers=['CPUExecutionProvider']); print('Model ready')"
+# Pre-download both models so switching via REMBG_MODEL env var needs no rebuild
+RUN python3 -c "from rembg import new_session; new_session('birefnet-portrait', providers=['CPUExecutionProvider']); print('birefnet ready')"
+RUN python3 -c "from rembg import new_session; new_session('isnet-general-use'); print('isnet ready')"
 
 # Create output directory
 RUN mkdir -p out_images
