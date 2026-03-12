@@ -27,27 +27,44 @@ def load_backgrounds(bg_dir: str = "./backgrounds") -> list[Image.Image]:
 
 
 def detect_face(image: Image.Image) -> Optional[tuple[int, int, int, int]]:
-    """Detect the largest face. Returns (x, y, w, h) or None."""
+    """Detect the largest face. Returns (x, y, w, h) or None.
+
+    Uses strict thresholds to avoid false positives (fingers, objects, textures).
+    A valid face must:
+    - Pass with minNeighbors=10 (high confidence, reduces false positives significantly)
+    - Be at least 8% of the image width AND 8% of the image height
+    - Be at least 60x60 pixels in absolute size
+    """
     img_array = np.array(image.convert("RGB"))
+    h, w = img_array.shape[:2]
     gray = cv2.cvtColor(img_array, cv2.COLOR_RGB2GRAY)
+
+    # Minimum face size: 8% of image dimensions, at least 60px
+    min_face_px = max(60, int(min(w, h) * 0.08))
 
     cascade_path = cv2.data.haarcascades + "haarcascade_frontalface_default.xml"
     faces = cv2.CascadeClassifier(cascade_path).detectMultiScale(
-        gray, scaleFactor=1.1, minNeighbors=5, minSize=(30, 30)
+        gray, scaleFactor=1.1, minNeighbors=10, minSize=(min_face_px, min_face_px)
     )
 
     if len(faces) == 0:
         profile_path = cv2.data.haarcascades + "haarcascade_profileface.xml"
         faces = cv2.CascadeClassifier(profile_path).detectMultiScale(
-            gray, scaleFactor=1.1, minNeighbors=5, minSize=(30, 30)
+            gray, scaleFactor=1.1, minNeighbors=10, minSize=(min_face_px, min_face_px)
         )
 
     if len(faces) == 0:
         return None
 
-    # Return the largest face
+    # Pick the largest detection and validate it's a reasonable size
     faces = sorted(faces, key=lambda f: f[2] * f[3], reverse=True)
-    return tuple(faces[0])
+    fx, fy, fw, fh = faces[0]
+
+    # Reject if face is smaller than 8% of image width or height (likely a false positive)
+    if fw < w * 0.08 or fh < h * 0.08:
+        return None
+
+    return (fx, fy, fw, fh)
 
 
 def remove_background(image: Image.Image) -> Image.Image:
