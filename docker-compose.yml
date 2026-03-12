@@ -13,8 +13,6 @@ services:
       - RATE_LIMIT_WINDOW_MINUTES=${RATE_LIMIT_WINDOW_MINUTES:-1}
       - JOB_EXPIRY_MINUTES=${JOB_EXPIRY_MINUTES:-10}
     volumes:
-      # Backgrounds (put your bg1.png–bg14.png here)
-      - ./backgrounds:/app/backgrounds:ro
       # Generated output images (auto-cleaned by APScheduler)
       - ./out_images:/app/out_images
       # AI model cache (~973MB, persists across rebuilds)
