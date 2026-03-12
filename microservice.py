@@ -78,7 +78,7 @@ backgrounds: list = []
 jobs: dict = {}
 jobs_lock = Lock()
 rate_limit_store: dict = {}
-executor = ThreadPoolExecutor(max_workers=3)
+executor = ThreadPoolExecutor(max_workers=1)  # ONNX session is not concurrent-safe; serialize all jobs
 
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 app.mount("/images", StaticFiles(directory=OUTPUT_DIR), name="images")
