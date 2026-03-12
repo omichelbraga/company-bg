@@ -77,16 +77,23 @@ def remove_background(image: Image.Image) -> Image.Image:
 
     # Clean up semi-transparent background artifacts
     alpha = np.array(cutout.split()[3], dtype=np.uint8)
-    alpha[alpha < 30] = 0   # kill clear background pixels
 
-    # Erode the alpha mask to remove thin edge artifacts (dark slivers, shoulder fringing)
+    # Kill semi-transparent fringe pixels aggressively — background remnants
+    # typically land in the 0-100 alpha range; solid person pixels are 200+
+    alpha[alpha < 80] = 0
+    alpha[alpha > 220] = 255
+
+    # Close small holes inside the person (fills gaps without growing edges)
     kernel = np.ones((3, 3), np.uint8)
-    alpha = cv2.erode(alpha, kernel, iterations=2)
+    alpha = cv2.morphologyEx(alpha, cv2.MORPH_CLOSE, kernel, iterations=1)
 
-    # Smooth the edges with a slight Gaussian blur on the alpha channel
-    alpha_smooth = cv2.GaussianBlur(alpha, (5, 5), sigmaX=1.5)
+    # Light erosion to clean remaining edge fringe
+    alpha = cv2.erode(alpha, kernel, iterations=1)
 
-    # Re-apply the hard floor after smoothing (don't let blur resurrect background)
+    # Smooth the edges with a Gaussian blur for natural anti-aliasing
+    alpha_smooth = cv2.GaussianBlur(alpha, (5, 5), sigmaX=1.2)
+
+    # Re-apply hard floor after smoothing
     alpha_smooth[alpha == 0] = 0
 
     cutout.putalpha(Image.fromarray(alpha_smooth, mode="L"))
