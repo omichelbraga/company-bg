@@ -5,8 +5,13 @@ services:
     restart: unless-stopped
     ports:
       - "8000:8000"
-    env_file:
-      - .env
+    environment:
+      - TOKEN=${TOKEN}
+      - CLEANUP_AGE_MINUTES=${CLEANUP_AGE_MINUTES:-5}
+      - CLEANUP_INTERVAL_MINUTES=${CLEANUP_INTERVAL_MINUTES:-5}
+      - RATE_LIMIT_MAX_REQUESTS=${RATE_LIMIT_MAX_REQUESTS:-5}
+      - RATE_LIMIT_WINDOW_MINUTES=${RATE_LIMIT_WINDOW_MINUTES:-1}
+      - JOB_EXPIRY_MINUTES=${JOB_EXPIRY_MINUTES:-10}
     volumes:
       # Backgrounds (put your bg1.png–bg14.png here)
       - ./backgrounds:/app/backgrounds:ro
