@@ -1,15 +1,15 @@
 # company-bg
 
-AI-powered employee photo background replacement service. Upload any photo of a person — the API detects their face, removes the background, and composites the result onto all backgrounds in the `backgrounds/` folder automatically. Ships with 14 branded compass backgrounds; add as many more as you want.
+AI-powered employee photo background replacement service. Upload any photo of a person — the API detects their face, removes the background, and composites the result onto every PNG in the `backgrounds/` folder. Ships with branded compass backgrounds; add as many more as you want.
 
 ## How It Works
 
 1. **Face detection** — OpenCV locates the face in the photo (any size, any orientation). If no face is found, the job fails immediately — no wasted processing.
 2. **Background removal** — `birefnet-portrait` model cleanly cuts out the person
 3. **Smart crop & scale** — face is centered on the background's compass center, person fills the frame
-4. **Compositing** — outputs 14 branded background variants as PNG files
+4. **Compositing** — one output per background PNG in the `backgrounds/` folder
 5. **Async processing** — job is queued instantly, processed in background; poll `/status/{job_id}` for results
-6. **Auto-cleanup** — generated images and job records are purged every 5 minutes via APScheduler
+6. **Auto-cleanup** — generated images and job records are purged automatically via APScheduler
 
 ## API
 
@@ -34,7 +34,7 @@ Requires Bearer token. Returns immediately with a `job_id`.
 }
 ```
 
-**Rate limit:** 5 requests per minute per email address.
+**Rate limit:** Configurable via `.env` (default 5 requests per minute per email).
 
 ---
 
@@ -51,8 +51,8 @@ Requires Bearer token. Poll this after submitting a job.
   "status": "done",
   "image_urls": [
     "/images/jsmith/JohnSmith-01.png",
-    "...",
-    "/images/jsmith/JohnSmith-14.png"
+    "/images/jsmith/JohnSmith-02.png",
+    "..."
   ],
   "request_id": "a1b2c3"
 }
@@ -68,16 +68,16 @@ Requires Bearer token. Poll this after submitting a job.
 }
 ```
 
-Images are accessible at `http://<host>:8000/images/{email_slug}/{filename}` for 5 minutes after completion.
+Images are accessible at `http://<host>:8000/images/{email_slug}/{filename}` until cleanup runs.
 
 ---
 
 ### `GET /backgrounds`
 
-Returns available backgrounds (no auth required).
+Returns list of loaded backgrounds (no auth required).
 
 ```json
-{ "count": 14, "backgrounds": ["bg1", "bg2", ..., "bg14"] }
+{ "count": 8, "backgrounds": ["corporate-blue", "corporate-red", "..."] }
 ```
 
 ---
@@ -87,9 +87,9 @@ Returns available backgrounds (no auth required).
 ```json
 {
   "status": "ok",
-  "backgrounds_loaded": 14,
+  "backgrounds_loaded": 8,
   "model": "birefnet-portrait",
-  "jobs_in_memory": 3
+  "jobs_in_memory": 2
 }
 ```
 
@@ -105,8 +105,7 @@ cd company-bg
 cp .env.example .env
 # Edit .env and set your TOKEN
 
-# Backgrounds are already included in the repo (bg1.png–bg14.png)
-# Add more PNGs to backgrounds/ anytime — no config needed
+# Backgrounds are already in the repo — add more PNGs to backgrounds/ anytime
 
 # Build and run
 docker compose up -d
@@ -129,27 +128,29 @@ docker compose up -d --build
 
 ### Option B — Local (Python)
 
-#### Requirements
-- Python 3.10+
-- ~1.5GB disk for AI models (downloaded automatically on first run)
-
 ```bash
 git clone https://github.com/omichelbraga/company-bg.git
 cd company-bg
 python3 -m venv venv
 source venv/bin/activate
 pip install -r requirements.txt
-```
-
-```bash
-cp .env.example .env
-# Edit .env and set your TOKEN
-```
-
-Drop any PNG files into the `backgrounds/` folder — loaded automatically on startup, sorted alphabetically, no limit. The repo already includes 14 branded backgrounds (`bg1.png`–`bg14.png`). Just add more PNGs to expand.
-
-```bash
+cp .env.example .env   # set your TOKEN
 uvicorn microservice:app --host 0.0.0.0 --port 8000
+```
+
+### Backgrounds
+
+Drop any PNG into the `backgrounds/` folder — picked up automatically on next restart, sorted alphabetically, no limit and no config changes needed.
+
+## Configuration (`.env`)
+
+```env
+TOKEN=your-api-key                # Bearer token for auth
+CLEANUP_AGE_MINUTES=5             # How old a folder must be before deletion
+CLEANUP_INTERVAL_MINUTES=5        # How often the scheduler runs
+RATE_LIMIT_MAX_REQUESTS=5         # Max requests per window per email
+RATE_LIMIT_WINDOW_MINUTES=1       # Rate limit window duration
+JOB_EXPIRY_MINUTES=10             # How long job records stay in memory
 ```
 
 ## Test
@@ -166,7 +167,7 @@ curl -X POST http://localhost:8000/process-image/ \
 curl http://localhost:8000/status/<job_id> \
   -H "Authorization: Bearer <your-token>"
 
-# 3. Access image
+# 3. Access image directly
 curl http://localhost:8000/images/john/JohnSmith-01.png
 ```
 
@@ -176,8 +177,10 @@ curl http://localhost:8000/images/john/JohnSmith-01.png
 company-bg/
 ├── microservice.py      # FastAPI app — async jobs, rate limiting, auth, scheduler
 ├── processor.py         # Image processing pipeline (face detection + birefnet)
-├── backgrounds/         # bg1.png – bg14.png included; add more PNGs freely
-├── out_images/          # Generated outputs (auto-cleaned every 5 min, not in repo)
+├── backgrounds/         # PNG backgrounds — add as many as you want
+├── out_images/          # Generated outputs (auto-cleaned, not in repo)
+├── Dockerfile
+├── docker-compose.yml
 ├── requirements.txt
 ├── .env.example
 └── README.md
