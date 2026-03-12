@@ -60,14 +60,17 @@ BACKGROUND_DIR = "backgrounds/"
 OUTPUT_DIR = "out_images/"
 MAX_FILE_SIZE_BYTES = 10 * 1024 * 1024  # 10 MB
 ALLOWED_EXTENSIONS = {".jpg", ".jpeg", ".png"}
-CLEANUP_AGE_SECONDS = 300  # 5 minutes
 
-MAX_REQUESTS = 5
-TIME_WINDOW = timedelta(minutes=1)
-
+# Configurable via .env
 TOKEN = os.getenv("TOKEN")
-
-JOB_EXPIRY_SECONDS = 600  # 10 minutes
+CLEANUP_AGE_MINUTES = int(os.getenv("CLEANUP_AGE_MINUTES", "5"))
+CLEANUP_AGE_SECONDS = CLEANUP_AGE_MINUTES * 60
+CLEANUP_INTERVAL_MINUTES = int(os.getenv("CLEANUP_INTERVAL_MINUTES", "5"))
+MAX_REQUESTS = int(os.getenv("RATE_LIMIT_MAX_REQUESTS", "5"))
+RATE_LIMIT_WINDOW_MINUTES = int(os.getenv("RATE_LIMIT_WINDOW_MINUTES", "1"))
+TIME_WINDOW = timedelta(minutes=RATE_LIMIT_WINDOW_MINUTES)
+JOB_EXPIRY_MINUTES = int(os.getenv("JOB_EXPIRY_MINUTES", "10"))
+JOB_EXPIRY_SECONDS = JOB_EXPIRY_MINUTES * 60
 
 # ── State ────────────────────────────────────────────────────────────────────
 backgrounds: list = []
@@ -117,8 +120,8 @@ def cleanup_expired_jobs():
         logger.info(f"Cleanup: expired {len(expired)} job(s) from memory")
 
 
-scheduler.add_job(cleanup_old_output_folders, "interval", minutes=5)
-scheduler.add_job(cleanup_expired_jobs, "interval", minutes=5)
+scheduler.add_job(cleanup_old_output_folders, "interval", minutes=CLEANUP_INTERVAL_MINUTES)
+scheduler.add_job(cleanup_expired_jobs, "interval", minutes=CLEANUP_INTERVAL_MINUTES)
 
 
 # ── Startup / Shutdown ───────────────────────────────────────────────────────
