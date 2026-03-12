@@ -12,15 +12,12 @@ services:
       - RATE_LIMIT_MAX_REQUESTS=${RATE_LIMIT_MAX_REQUESTS:-5}
       - RATE_LIMIT_WINDOW_MINUTES=${RATE_LIMIT_WINDOW_MINUTES:-1}
       - JOB_EXPIRY_MINUTES=${JOB_EXPIRY_MINUTES:-10}
-    deploy:
-      resources:
-        limits:
-          memory: 4g
     volumes:
       # Generated output images (auto-cleaned by APScheduler)
-      - ./out_images:/app/out_images
+      - company-bg-output:/app/out_images
       # AI model cache (~973MB, persists across rebuilds)
-      - model-cache:/root/.u2net
+      - company-bg-model:/root/.u2net
 
 volumes:
-  model-cache:
+  company-bg-output:
+  company-bg-model:

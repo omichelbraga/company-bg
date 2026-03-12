@@ -77,7 +77,7 @@ backgrounds: list = []
 jobs: dict = {}
 jobs_lock = Lock()
 rate_limit_store: dict = {}
-executor = ThreadPoolExecutor(max_workers=1)  # birefnet uses ~2-3GB RAM — one job at a time
+executor = ThreadPoolExecutor(max_workers=3)
 
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 app.mount("/images", StaticFiles(directory=OUTPUT_DIR), name="images")
