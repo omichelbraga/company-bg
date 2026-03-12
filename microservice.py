@@ -377,7 +377,7 @@ async def health(request: Request):
             "request_id": request_id,
             "status": "ok",
             "backgrounds_loaded": len(backgrounds),
-            "model": "birefnet-portrait",
+            "model": "isnet-general-use",
             "jobs_in_memory": job_count,
         }
     )

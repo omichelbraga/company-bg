@@ -17,7 +17,7 @@ def main():
     input_path = sys.argv[1]
     output_path = sys.argv[2]
 
-    session = new_session("birefnet-portrait", providers=["CPUExecutionProvider"])
+    session = new_session("isnet-general-use")
 
     img = Image.open(input_path).convert("RGB")
     buf = io.BytesIO()
