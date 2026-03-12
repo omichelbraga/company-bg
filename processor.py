@@ -13,7 +13,9 @@ from PIL import Image
 from rembg import new_session, remove
 
 # Load the portrait-optimized model once at startup (973MB, don't reload per request)
-_REMBG_SESSION = new_session("birefnet-portrait")
+# Force CPU provider — prevents onnxruntime from attempting hardware providers
+# that segfault on Hyper-V/VMBUS environments after first inference
+_REMBG_SESSION = new_session("birefnet-portrait", providers=["CPUExecutionProvider"])
 
 # ONNX runtime is not thread-safe for concurrent inference — serialize rembg calls
 _REMBG_LOCK = threading.Lock()
