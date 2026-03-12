@@ -120,6 +120,15 @@ def build_portrait(
 
     new_w = int(orig_w * scale)
     new_h = int(orig_h * scale)
+
+    # Ensure the scaled person fills the entire background (cover fit — no black bars).
+    # If the scaled image is narrower or shorter than the bg, scale up to cover.
+    fill_scale = max(bg_w / new_w, bg_h / new_h)
+    if fill_scale > 1.0:
+        scale *= fill_scale
+        new_w = int(orig_w * scale)
+        new_h = int(orig_h * scale)
+
     scaled = cutout.resize((new_w, new_h), Image.Resampling.LANCZOS)
 
     # Face center position in scaled image
