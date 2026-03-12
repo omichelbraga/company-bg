@@ -3,6 +3,5 @@ __pycache__/
 *.pyc
 .env
 out_images/
-backgrounds/
 *.zip
 .git/

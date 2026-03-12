@@ -13,8 +13,9 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy application code
+# Copy application code and backgrounds
 COPY microservice.py processor.py ./
+COPY backgrounds/ ./backgrounds/
 
 # Create output directory
 RUN mkdir -p out_images
