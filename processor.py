@@ -5,6 +5,8 @@ import zipfile
 from pathlib import Path
 from typing import Optional
 
+import threading
+
 import cv2
 import numpy as np
 from PIL import Image
@@ -12,6 +14,9 @@ from rembg import new_session, remove
 
 # Load the portrait-optimized model once at startup (973MB, don't reload per request)
 _REMBG_SESSION = new_session("birefnet-portrait")
+
+# ONNX runtime is not thread-safe for concurrent inference — serialize rembg calls
+_REMBG_LOCK = threading.Lock()
 
 
 def load_backgrounds(bg_dir: str = "./backgrounds") -> list[Image.Image]:
@@ -73,7 +78,8 @@ def remove_background(image: Image.Image) -> Image.Image:
     img_bytes = io.BytesIO()
     image.save(img_bytes, format="PNG")
     img_bytes.seek(0)
-    result_bytes = remove(img_bytes.read(), session=_REMBG_SESSION)
+    with _REMBG_LOCK:
+        result_bytes = remove(img_bytes.read(), session=_REMBG_SESSION)
     cutout = Image.open(io.BytesIO(result_bytes)).convert("RGBA")
 
     # Clean up semi-transparent background artifacts
