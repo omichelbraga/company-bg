@@ -79,6 +79,10 @@ def remove_background(image: Image.Image) -> Image.Image:
     alpha = np.array(cutout.split()[3], dtype=np.uint8)
     alpha[alpha < 30] = 0   # kill clear background pixels
 
+    # Erode the alpha mask by 2px to remove thin edge artifacts (dark slivers, fringing)
+    kernel = np.ones((3, 3), np.uint8)
+    alpha = cv2.erode(alpha, kernel, iterations=1)
+
     # Smooth the edges with a slight Gaussian blur on the alpha channel
     alpha_smooth = cv2.GaussianBlur(alpha, (5, 5), sigmaX=1.5)
 
