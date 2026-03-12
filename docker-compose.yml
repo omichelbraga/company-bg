@@ -15,9 +15,6 @@ services:
     volumes:
       # Generated output images (auto-cleaned by APScheduler)
       - company-bg-output:/app/out_images
-      # AI model cache (~973MB, persists across rebuilds)
-      - company-bg-model:/root/.u2net
 
 volumes:
   company-bg-output:
-  company-bg-model:
