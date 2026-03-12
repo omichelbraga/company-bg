@@ -1,0 +1,19 @@
+services:
+  company-bg:
+    build: .
+    container_name: company-bg
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    env_file:
+      - .env
+    volumes:
+      # Backgrounds (put your bg1.png–bg14.png here)
+      - ./backgrounds:/app/backgrounds:ro
+      # Generated output images (auto-cleaned by APScheduler)
+      - ./out_images:/app/out_images
+      # AI model cache (~973MB, persists across rebuilds)
+      - model-cache:/root/.u2net
+
+volumes:
+  model-cache:

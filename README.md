@@ -95,11 +95,44 @@ Returns available backgrounds (no auth required).
 
 ## Setup
 
-### Requirements
+### Option A — Docker (recommended)
+
+```bash
+git clone https://github.com/omichelbraga/company-bg.git
+cd company-bg
+
+# Configure
+cp .env.example .env
+# Edit .env and set your TOKEN
+
+# Add backgrounds
+mkdir backgrounds
+# Copy bg1.png through bg14.png into backgrounds/
+
+# Build and run
+docker compose up -d
+```
+
+The `birefnet-portrait` model (~973MB) downloads automatically on first startup and is cached in a named Docker volume (`model-cache`) — won't re-download on rebuild.
+
+```bash
+# Logs
+docker compose logs -f
+
+# Stop
+docker compose down
+
+# Rebuild after code changes
+docker compose up -d --build
+```
+
+---
+
+### Option B — Local (Python)
+
+#### Requirements
 - Python 3.10+
 - ~1.5GB disk for AI models (downloaded automatically on first run)
-
-### Install
 
 ```bash
 git clone https://github.com/omichelbraga/company-bg.git
@@ -109,24 +142,16 @@ source venv/bin/activate
 pip install -r requirements.txt
 ```
 
-### Configure
-
 ```bash
 cp .env.example .env
 # Edit .env and set your TOKEN
 ```
 
-### Add Backgrounds
-
-Place your 14 background images in the `backgrounds/` folder named `bg1.png` through `bg14.png`.
-
-### Run
+Place your 14 background images in `backgrounds/` named `bg1.png` through `bg14.png`.
 
 ```bash
 uvicorn microservice:app --host 0.0.0.0 --port 8000
 ```
-
-The `birefnet-portrait` model (~973MB) downloads automatically on first startup.
 
 ## Test
 
