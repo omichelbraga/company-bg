@@ -1,24 +1,17 @@
 """Image processing logic for photo background replacement."""
 
 import io
+import os
+import subprocess
+import sys
+import tempfile
 import zipfile
 from pathlib import Path
 from typing import Optional
 
-import threading
-
 import cv2
 import numpy as np
 from PIL import Image
-from rembg import new_session, remove
-
-# Load the portrait-optimized model once at startup (973MB, don't reload per request)
-# Force CPU provider — prevents onnxruntime from attempting hardware providers
-# that segfault on Hyper-V/VMBUS environments after first inference
-_REMBG_SESSION = new_session("birefnet-portrait", providers=["CPUExecutionProvider"])
-
-# ONNX runtime is not thread-safe for concurrent inference — serialize rembg calls
-_REMBG_LOCK = threading.Lock()
 
 
 def load_backgrounds(bg_dir: str = "./backgrounds") -> list[Image.Image]:
@@ -76,13 +69,34 @@ def detect_face(image: Image.Image) -> Optional[tuple[int, int, int, int]]:
 
 
 def remove_background(image: Image.Image) -> Image.Image:
-    """Remove background from the full image using rembg."""
-    img_bytes = io.BytesIO()
-    image.save(img_bytes, format="PNG")
-    img_bytes.seek(0)
-    with _REMBG_LOCK:
-        result_bytes = remove(img_bytes.read(), session=_REMBG_SESSION)
-    cutout = Image.open(io.BytesIO(result_bytes)).convert("RGBA")
+    """Remove background using an isolated subprocess.
+
+    Runs rembg in a child process so any onnxruntime segfault only kills
+    the worker, not the uvicorn server.
+    """
+    worker = os.path.join(os.path.dirname(os.path.abspath(__file__)), "rembg_worker.py")
+
+    with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as fin:
+        image.save(fin.name, format="PNG")
+        input_path = fin.name
+    output_path = input_path + "_out.png"
+
+    try:
+        proc = subprocess.run(
+            [sys.executable, worker, input_path, output_path],
+            timeout=120,
+            capture_output=True,
+        )
+        if proc.returncode != 0:
+            err = proc.stderr.decode(errors="replace")
+            raise RuntimeError(f"rembg worker exit {proc.returncode}: {err[:300]}")
+        cutout = Image.open(output_path).convert("RGBA")
+    finally:
+        for p in (input_path, output_path):
+            try:
+                os.unlink(p)
+            except OSError:
+                pass
 
     # Clean up semi-transparent background artifacts
     alpha = np.array(cutout.split()[3], dtype=np.uint8)
