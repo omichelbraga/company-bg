@@ -14,7 +14,7 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy application code and backgrounds
-COPY microservice.py processor.py ./
+COPY microservice.py processor.py rembg_worker.py ./
 COPY backgrounds/ ./backgrounds/
 
 # Pre-download the birefnet-portrait model at build time (~973MB)
