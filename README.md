@@ -1,15 +1,17 @@
 # company-bg
 
-AI-powered employee photo background replacement service. Upload any photo of a person — the API detects their face, removes the background, and composites the result onto every PNG in the `backgrounds/` folder. Ships with branded compass backgrounds; add as many more as you want.
+AI-powered employee photo background replacement service. Upload any photo of a person — the API detects their face, removes the background, and composites the result onto every PNG in the `backgrounds/` folder automatically.
+
+Ships with branded compass-rose backgrounds. Add as many more PNGs as you want — no config changes needed.
 
 ## How It Works
 
-1. **Face detection** — OpenCV locates the face in the photo (any size, any orientation). If no face is found, the job fails immediately — no wasted processing.
-2. **Background removal** — `birefnet-portrait` model cleanly cuts out the person
+1. **Face detection** — OpenCV locates the face (any orientation, any size). No face = instant fail, no wasted processing.
+2. **Background removal** — rembg AI model cuts out the person cleanly (runs in an isolated subprocess for stability)
 3. **Smart crop & scale** — face is centered on the background's compass center, person fills the frame
-4. **Compositing** — one output per background PNG in the `backgrounds/` folder
-5. **Async processing** — job is queued instantly, processed in background; poll `/status/{job_id}` for results
-6. **Auto-cleanup** — generated images and job records are purged automatically via APScheduler
+4. **Compositing** — one output PNG per background file
+5. **Async processing** — job queued instantly; poll `/status/{job_id}` for results
+6. **Auto-cleanup** — generated images and job records purged automatically
 
 ## API
 
@@ -17,58 +19,34 @@ AI-powered employee photo background replacement service. Upload any photo of a 
 
 Requires Bearer token. Returns immediately with a `job_id`.
 
-**Form fields:**
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
 | `file` | File | One of these | Image upload (JPG/PNG, max 10MB) |
 | `image_url` | string | One of these | URL to a publicly accessible image |
-| `name` | string | ✅ | Person's full name (used for filenames) |
-| `email` | string | ✅ | Used for rate limiting and output folder |
+| `name` | string | ✅ | Person's full name |
+| `email` | string | ✅ | Rate limit key + output folder |
 
-**Response `202 Accepted`:**
 ```json
-{
-  "request_id": "a1b2c3",
-  "job_id": "fa42c7b3-cb8a-4e59-88be-212c09fb2811",
-  "status": "queued"
-}
+{ "job_id": "fa42c7b3-...", "status": "queued", "request_id": "a1b2c3" }
 ```
-
-**Rate limit:** Configurable via `.env` (default 5 requests per minute per email).
 
 ---
 
 ### `GET /status/{job_id}`
 
-Requires Bearer token. Poll this after submitting a job.
+Requires Bearer token. Poll after submitting.
 
 **Statuses:** `queued` → `processing` → `done` | `failed`
 
-**Response when done:**
 ```json
 {
   "job_id": "fa42c7b3-...",
   "status": "done",
-  "image_urls": [
-    "/images/jsmith/JohnSmith-01.png",
-    "/images/jsmith/JohnSmith-02.png",
-    "..."
-  ],
-  "request_id": "a1b2c3"
+  "image_urls": ["/images/jsmith/JohnSmith-01.png", "..."]
 }
 ```
 
-**Response when failed:**
-```json
-{
-  "job_id": "...",
-  "status": "failed",
-  "error": "No face detected in the provided image. Please upload a clear photo of a person.",
-  "request_id": "..."
-}
-```
-
-Images are accessible at `http://<host>:8000/images/{email_slug}/{filename}` until cleanup runs.
+Images served at `http://<host>:8002/images/{email_slug}/{filename}` until cleanup runs.
 
 ---
 
@@ -77,7 +55,7 @@ Images are accessible at `http://<host>:8000/images/{email_slug}/{filename}` unt
 Returns list of loaded backgrounds (no auth required).
 
 ```json
-{ "count": 8, "backgrounds": ["corporate-blue", "corporate-red", "..."] }
+{ "count": 14, "backgrounds": ["bg1", "bg2", "..."] }
 ```
 
 ---
@@ -87,46 +65,37 @@ Returns list of loaded backgrounds (no auth required).
 ```json
 {
   "status": "ok",
-  "backgrounds_loaded": 8,
+  "backgrounds_loaded": 14,
   "model": "birefnet-portrait",
   "jobs_in_memory": 2
 }
 ```
 
+---
+
 ## Setup
 
-### Option A — Docker (recommended)
+### Option A — Docker / Portainer (recommended)
 
 ```bash
 git clone https://github.com/omichelbraga/company-bg.git
 cd company-bg
-
-# Configure
 cp .env.example .env
-# Edit .env and set your TOKEN
-
-# Backgrounds are already in the repo — add more PNGs to backgrounds/ anytime
-
-# Build and run
+# Edit .env — set TOKEN at minimum
 docker compose up -d
 ```
 
-The `birefnet-portrait` model (~973MB) downloads automatically on first startup and is cached in a named Docker volume (`model-cache`) — won't re-download on rebuild.
+**Portainer Repository stack:**
+- Repository URL: `https://github.com/omichelbraga/company-bg`
+- Reference: `refs/heads/master`
+- Compose path: `docker-compose.yml`
+- Add env vars in the Portainer UI (TOKEN is required; rest have defaults)
 
-```bash
-# Logs
-docker compose logs -f
-
-# Stop
-docker compose down
-
-# Rebuild after code changes
-docker compose up -d --build
-```
+First build takes ~5–10 min — both AI models are downloaded during build so runtime is instant.
 
 ---
 
-### Option B — Local (Python)
+### Option B — Local Python
 
 ```bash
 git clone https://github.com/omichelbraga/company-bg.git
@@ -134,49 +103,63 @@ cd company-bg
 python3 -m venv venv
 source venv/bin/activate
 pip install -r requirements.txt
-cp .env.example .env   # set your TOKEN
+cp .env.example .env   # set TOKEN
 uvicorn microservice:app --host 0.0.0.0 --port 8000
 ```
 
+---
+
 ### Backgrounds
 
-Drop any PNG into the `backgrounds/` folder — picked up automatically on next restart, sorted alphabetically, no limit and no config changes needed.
+Drop any PNG into the `backgrounds/` folder — picked up on next restart, sorted alphabetically, no limit.
+
+---
 
 ## Configuration (`.env`)
 
-```env
-TOKEN=your-api-key                # Bearer token for auth
-CLEANUP_AGE_MINUTES=5             # How old a folder must be before deletion
-CLEANUP_INTERVAL_MINUTES=5        # How often the scheduler runs
-RATE_LIMIT_MAX_REQUESTS=5         # Max requests per window per email
-RATE_LIMIT_WINDOW_MINUTES=1       # Rate limit window duration
-JOB_EXPIRY_MINUTES=10             # How long job records stay in memory
-```
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `TOKEN` | *(required)* | Bearer token for API auth |
+| `REMBG_MODEL` | `birefnet-portrait` | AI model: `birefnet-portrait` (best quality) or `isnet-general-use` (faster, lighter) |
+| `CLEANUP_AGE_MINUTES` | `5` | Age before output folders are deleted |
+| `CLEANUP_INTERVAL_MINUTES` | `5` | How often cleanup runs |
+| `RATE_LIMIT_MAX_REQUESTS` | `5` | Max requests per window per email |
+| `RATE_LIMIT_WINDOW_MINUTES` | `1` | Rate limit window |
+| `JOB_EXPIRY_MINUTES` | `10` | How long job records stay in memory |
+
+Switching `REMBG_MODEL` only requires a container restart — no rebuild needed (both models are pre-downloaded in the image).
+
+---
 
 ## Test
 
 ```bash
-# 1. Submit job
-curl -X POST http://localhost:8000/process-image/ \
-  -H "Authorization: Bearer <your-token>" \
+# Submit
+curl -X POST http://localhost:8002/process-image/ \
+  -H "Authorization: Bearer <TOKEN>" \
   -F "file=@photo.jpg" \
   -F "name=John Smith" \
   -F "email=john@example.com"
 
-# 2. Poll status
-curl http://localhost:8000/status/<job_id> \
-  -H "Authorization: Bearer <your-token>"
+# Poll
+curl http://localhost:8002/status/<job_id> \
+  -H "Authorization: Bearer <TOKEN>"
 
-# 3. Access image directly
-curl http://localhost:8000/images/john/JohnSmith-01.png
+# Download result
+curl http://localhost:8002/images/john/JohnSmith-01.png -o result.png
 ```
+
+A PowerShell script (`Submit-Photo.ps1`) is available separately — submits a photo and downloads all results to `Downloads\company-bg\`.
+
+---
 
 ## Project Structure
 
 ```
 company-bg/
-├── microservice.py      # FastAPI app — async jobs, rate limiting, auth, scheduler
-├── processor.py         # Image processing pipeline (face detection + birefnet)
+├── microservice.py      # FastAPI app — auth, rate limiting, async jobs, scheduler
+├── processor.py         # Image pipeline (face detection, compositing, alpha cleanup)
+├── rembg_worker.py      # Isolated subprocess for AI background removal
 ├── backgrounds/         # PNG backgrounds — add as many as you want
 ├── out_images/          # Generated outputs (auto-cleaned, not in repo)
 ├── Dockerfile
@@ -189,8 +172,8 @@ company-bg/
 ## Stack
 
 - **FastAPI** — API framework
-- **rembg + birefnet-portrait** — state-of-the-art portrait background removal
+- **rembg** — AI background removal (birefnet-portrait / isnet-general-use)
 - **OpenCV** — face detection
-- **Pillow** — image compositing
-- **APScheduler** — periodic cleanup of output files and expired jobs
+- **Pillow** — image compositing and alpha processing
+- **APScheduler** — periodic cleanup
 - **python-dotenv** — config management
