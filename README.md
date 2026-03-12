@@ -1,6 +1,6 @@
 # company-bg
 
-AI-powered employee photo background replacement service. Upload any photo of a person — the API detects their face, removes the background, and composites the result onto 14 branded backgrounds automatically.
+AI-powered employee photo background replacement service. Upload any photo of a person — the API detects their face, removes the background, and composites the result onto all backgrounds in the `backgrounds/` folder automatically. Ships with 14 branded compass backgrounds; add as many more as you want.
 
 ## How It Works
 
@@ -105,9 +105,8 @@ cd company-bg
 cp .env.example .env
 # Edit .env and set your TOKEN
 
-# Add backgrounds
-mkdir backgrounds
-# Copy bg1.png through bg14.png into backgrounds/
+# Backgrounds are already included in the repo (bg1.png–bg14.png)
+# Add more PNGs to backgrounds/ anytime — no config needed
 
 # Build and run
 docker compose up -d
@@ -147,7 +146,7 @@ cp .env.example .env
 # Edit .env and set your TOKEN
 ```
 
-Place your 14 background images in `backgrounds/` named `bg1.png` through `bg14.png`.
+Drop any PNG files into the `backgrounds/` folder — loaded automatically on startup, sorted alphabetically, no limit. The repo already includes 14 branded backgrounds (`bg1.png`–`bg14.png`). Just add more PNGs to expand.
 
 ```bash
 uvicorn microservice:app --host 0.0.0.0 --port 8000
@@ -177,7 +176,7 @@ curl http://localhost:8000/images/john/JohnSmith-01.png
 company-bg/
 ├── microservice.py      # FastAPI app — async jobs, rate limiting, auth, scheduler
 ├── processor.py         # Image processing pipeline (face detection + birefnet)
-├── backgrounds/         # bg1.png – bg14.png (not in repo)
+├── backgrounds/         # bg1.png – bg14.png included; add more PNGs freely
 ├── out_images/          # Generated outputs (auto-cleaned every 5 min, not in repo)
 ├── requirements.txt
 ├── .env.example
