@@ -241,7 +241,6 @@ def _process_job(job_id: str, raw: bytes, name: str, email: str, tbg_requested: 
             image_urls.append(f"/images/{email_slug}/{filename}")
 
         with jobs_lock:
-            jobs[job_id]["status"] = "done"
             jobs[job_id]["image_urls"] = image_urls
 
         if tbg_requested:
@@ -261,16 +260,22 @@ def _process_job(job_id: str, raw: bytes, name: str, email: str, tbg_requested: 
                     jobs[job_id]["tbg_image_urls"] = tbg_urls
                     jobs[job_id]["tbg_warning"] = None
                     jobs[job_id]["tbg_error"] = None
+                    jobs[job_id]["status"] = "done"
             except (GraphError, TeamsBackgroundError) as e:
                 with jobs_lock:
                     jobs[job_id]["tbg_status"] = "failed"
                     jobs[job_id]["tbg_error"] = str(e)
+                    jobs[job_id]["status"] = "done_with_warnings"
                 logger.warning(f"Job {job_id} Teams background generation failed: {e}")
             except Exception as e:
                 with jobs_lock:
                     jobs[job_id]["tbg_status"] = "failed"
                     jobs[job_id]["tbg_error"] = f"Unexpected Teams background error: {e}"
+                    jobs[job_id]["status"] = "done_with_warnings"
                 logger.error(f"Job {job_id} unexpected Teams background failure: {e}")
+        else:
+            with jobs_lock:
+                jobs[job_id]["status"] = "done"
 
         logger.info(f"Job {job_id} completed — {len(image_urls)} images")
 
@@ -397,7 +402,7 @@ async def get_job_status(job_id: str, request: Request):
             "error": job.get("tbg_error"),
         },
     }
-    if job["status"] == "done":
+    if job["status"] in {"done", "done_with_warnings"}:
         response["image_urls"] = job["image_urls"]
     if job["status"] == "failed":
         response["error"] = job["error"]
