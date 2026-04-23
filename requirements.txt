@@ -9,3 +9,4 @@ numpy
 apscheduler
 python-dotenv
 requests
+cairosvg
