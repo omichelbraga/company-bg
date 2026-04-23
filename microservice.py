@@ -18,6 +18,7 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta
 from io import BytesIO
 from threading import Lock
+from typing import Optional
 
 import requests as http_requests
 from apscheduler.schedulers.background import BackgroundScheduler
@@ -36,6 +37,8 @@ from processor import (
     build_portrait,
     composite_on_background,
 )
+from graph_client import GraphError, get_user_profile_by_email
+from tbg_processor import TeamsBackgroundError, generate_teams_backgrounds
 
 # ── Logging ──────────────────────────────────────────────────────────────────
 logging.basicConfig(
@@ -180,6 +183,10 @@ def _short_id() -> str:
     return uuid.uuid4().hex[:8]
 
 
+def parse_bool(value: Optional[str]) -> bool:
+    return str(value).strip().lower() in {"1", "true", "yes", "on"}
+
+
 async def download_image_from_url(image_url: str) -> BytesIO:
     headers = {"User-Agent": "Mozilla/5.0"}
     try:
@@ -193,7 +200,7 @@ async def download_image_from_url(image_url: str) -> BytesIO:
 
 
 # ── Background job worker ───────────────────────────────────────────────────
-def _process_job(job_id: str, raw: bytes, name: str, email: str):
+def _process_job(job_id: str, raw: bytes, name: str, email: str, tbg_requested: bool):
     """Run the heavy processing pipeline in a thread."""
     with jobs_lock:
         jobs[job_id]["status"] = "processing"
@@ -237,6 +244,34 @@ def _process_job(job_id: str, raw: bytes, name: str, email: str):
             jobs[job_id]["status"] = "done"
             jobs[job_id]["image_urls"] = image_urls
 
+        if tbg_requested:
+            with jobs_lock:
+                jobs[job_id]["tbg_status"] = "processing"
+
+            try:
+                profile = get_user_profile_by_email(email)
+                tbg_urls = generate_teams_backgrounds(
+                    email_slug=email_slug,
+                    display_name=profile["display_name"],
+                    job_title=profile["job_title"],
+                    output_root=OUTPUT_DIR,
+                )
+                with jobs_lock:
+                    jobs[job_id]["tbg_status"] = "done"
+                    jobs[job_id]["tbg_image_urls"] = tbg_urls
+                    jobs[job_id]["tbg_warning"] = None
+                    jobs[job_id]["tbg_error"] = None
+            except (GraphError, TeamsBackgroundError) as e:
+                with jobs_lock:
+                    jobs[job_id]["tbg_status"] = "failed"
+                    jobs[job_id]["tbg_error"] = str(e)
+                logger.warning(f"Job {job_id} Teams background generation failed: {e}")
+            except Exception as e:
+                with jobs_lock:
+                    jobs[job_id]["tbg_status"] = "failed"
+                    jobs[job_id]["tbg_error"] = f"Unexpected Teams background error: {e}"
+                logger.error(f"Job {job_id} unexpected Teams background failure: {e}")
+
         logger.info(f"Job {job_id} completed — {len(image_urls)} images")
 
     except Exception as e:
@@ -258,8 +293,10 @@ async def process_image(
     image_url: str = Form(None),
     name: str = Form(...),
     email: str = Form(...),
+    tbg: str = Form(None),
 ):
     request_id = request.state.request_id
+    tbg_requested = parse_bool(tbg)
 
     # Rate limit
     if not check_rate_limit(email):
@@ -311,12 +348,17 @@ async def process_image(
             "created_at": datetime.now(),
             "image_urls": None,
             "error": None,
+            "tbg_requested": tbg_requested,
+            "tbg_status": "not_requested" if not tbg_requested else "queued",
+            "tbg_image_urls": None,
+            "tbg_warning": None,
+            "tbg_error": None,
         }
 
     logger.info(f"Job {job_id} created (email={email})")
 
     # Submit to thread pool
-    executor.submit(_process_job, job_id, raw, name, email)
+    executor.submit(_process_job, job_id, raw, name, email, tbg_requested)
 
     return JSONResponse(
         status_code=202,
@@ -324,6 +366,10 @@ async def process_image(
             "request_id": request_id,
             "job_id": job_id,
             "status": "queued",
+            "teams_backgrounds": {
+                "requested": tbg_requested,
+                "status": "not_requested" if not tbg_requested else "queued",
+            },
         },
     )
 
@@ -343,6 +389,13 @@ async def get_job_status(job_id: str, request: Request):
         "request_id": request_id,
         "job_id": job_id,
         "status": job["status"],
+        "teams_backgrounds": {
+            "requested": job.get("tbg_requested", False),
+            "status": job.get("tbg_status", "not_requested"),
+            "image_urls": job.get("tbg_image_urls"),
+            "warning": job.get("tbg_warning"),
+            "error": job.get("tbg_error"),
+        },
     }
     if job["status"] == "done":
         response["image_urls"] = job["image_urls"]

@@ -13,6 +13,10 @@ services:
       - RATE_LIMIT_WINDOW_MINUTES=${RATE_LIMIT_WINDOW_MINUTES:-1}
       - JOB_EXPIRY_MINUTES=${JOB_EXPIRY_MINUTES:-10}
       - REMBG_MODEL=${REMBG_MODEL:-birefnet-portrait}
+      - GRAPH_TENANT_ID=${GRAPH_TENANT_ID:-}
+      - GRAPH_CLIENT_ID=${GRAPH_CLIENT_ID:-}
+      - GRAPH_CLIENT_SECRET=${GRAPH_CLIENT_SECRET:-}
+      - GRAPH_TIMEOUT_SECONDS=${GRAPH_TIMEOUT_SECONDS:-15}
     volumes:
       # Generated output images (auto-cleaned by APScheduler)
       - company-bg-output:/app/out_images
