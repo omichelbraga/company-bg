@@ -135,7 +135,7 @@ async def startup():
     backgrounds = load_backgrounds(BACKGROUND_DIR)
     logger.info(f"Loaded {len(backgrounds)} backgrounds")
     scheduler.start()
-    logger.info("APScheduler started (cleanup every 5 min)")
+    logger.info(f"APScheduler started (cleanup every {CLEANUP_INTERVAL_MINUTES} min)")
 
 
 @app.on_event("shutdown")
