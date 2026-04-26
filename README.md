@@ -1,6 +1,6 @@
 # company-bg
 
-AI-powered employee photo background replacement service. Upload any photo of a person — the API detects their face, removes the background, and composites the result onto every PNG in the `backgrounds/` folder automatically.
+AI-powered employee photo background replacement service. Upload any photo of a person — the API detects their face, removes the background, and composites the result onto every PNG in the `backgrounds/` folder automatically. Optionally also generates Microsoft Teams meeting backgrounds populated with the user's display name and job title (pulled from Microsoft Entra ID via Graph).
 
 Ships with branded compass-rose backgrounds. Add as many more PNGs as you want — no config changes needed.
 
@@ -11,7 +11,8 @@ Ships with branded compass-rose backgrounds. Add as many more PNGs as you want �
 3. **Smart crop & scale** — face is centered on the background's compass center, person fills the frame
 4. **Compositing** — one output PNG per background file
 5. **Async processing** — job queued instantly; poll `/status/{job_id}` for results
-6. **Auto-cleanup** — generated images and job records purged automatically
+6. **Optional: Teams backgrounds** — when `tbg=true`, after the photo composites finish, the service looks up the user in Microsoft Entra (by `mail` then `userPrincipalName`), populates 8 SVG templates with their display name + job title, and renders them to PNG.
+7. **Auto-cleanup** — generated images and job records purged automatically
 
 ## API
 
@@ -21,13 +22,19 @@ Requires Bearer token. Returns immediately with a `job_id`.
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
-| `file` | File | One of these | Image upload (JPG/PNG, max 10MB) |
+| `file` | File | One of these | Image upload (JPG/PNG, max 10 MB) |
 | `image_url` | string | One of these | URL to a publicly accessible image |
 | `name` | string | ✅ | Person's full name |
-| `email` | string | ✅ | Rate limit key + output folder |
+| `email` | string | ✅ | Rate limit key + output folder + Entra lookup key |
+| `tbg` | string | optional | `true` / `1` / `yes` / `on` to also generate Teams backgrounds |
 
 ```json
-{ "job_id": "fa42c7b3-...", "status": "queued", "request_id": "a1b2c3" }
+{
+  "request_id": "a1b2c3",
+  "job_id": "fa42c7b3-...",
+  "status": "queued",
+  "teams_backgrounds": { "requested": true, "status": "queued" }
+}
 ```
 
 ---
@@ -36,13 +43,25 @@ Requires Bearer token. Returns immediately with a `job_id`.
 
 Requires Bearer token. Poll after submitting.
 
-**Statuses:** `queued` → `processing` → `done` | `failed`
+**Statuses:**
+- Photos: `queued` → `processing` → `done` | `done_with_warnings` | `failed`
+- Teams BG: `not_requested` | `queued` | `processing` | `done` | `failed`
+
+`done_with_warnings` means photos succeeded but Teams BG failed (e.g., Graph user not found, Graph misconfigured). Photo image URLs are still returned.
 
 ```json
 {
+  "request_id": "a1b2c3",
   "job_id": "fa42c7b3-...",
   "status": "done",
-  "image_urls": ["/images/jsmith/JohnSmith-01.png", "..."]
+  "image_urls": ["/images/jsmith/JohnSmith-01.png", "..."],
+  "teams_backgrounds": {
+    "requested": true,
+    "status": "done",
+    "image_urls": ["/images/jsmith/teams-backgrounds/tbg1.png", "..."],
+    "warning": null,
+    "error": null
+  }
 }
 ```
 
@@ -55,7 +74,7 @@ Images served at `http://<host>:8002/images/{email_slug}/{filename}` until clean
 Returns list of loaded backgrounds (no auth required).
 
 ```json
-{ "count": 14, "backgrounds": ["bg1", "bg2", "..."] }
+{ "request_id": "a1b2c3", "count": 37, "backgrounds": ["bg1", "bg2", "..."] }
 ```
 
 ---
@@ -64,8 +83,9 @@ Returns list of loaded backgrounds (no auth required).
 
 ```json
 {
+  "request_id": "a1b2c3",
   "status": "ok",
-  "backgrounds_loaded": 14,
+  "backgrounds_loaded": 37,
   "model": "birefnet-portrait",
   "jobs_in_memory": 2
 }
@@ -81,17 +101,31 @@ Returns list of loaded backgrounds (no auth required).
 git clone https://github.com/omichelbraga/company-bg.git
 cd company-bg
 cp .env.example .env
-# Edit .env — set TOKEN at minimum
+# Edit .env — set TOKEN at minimum (and GRAPH_* if you want Teams backgrounds)
 docker compose up -d
 ```
 
-**Portainer Repository stack:**
+**Portainer Repository stack (production):**
 - Repository URL: `https://github.com/omichelbraga/company-bg`
 - Reference: `refs/heads/master`
 - Compose path: `docker-compose.yml`
-- Add env vars in the Portainer UI (TOKEN is required; rest have defaults)
+- Add env vars in the Portainer UI (TOKEN required; GRAPH_* required only for Teams BG; rest have defaults)
 
-First build takes ~5–10 min — both AI models are downloaded during build so runtime is instant.
+First build takes ~5–10 min — both rembg AI models (birefnet-portrait ~973 MB and isnet-general-use ~170 MB) are downloaded during build so runtime is instant and switching models needs no rebuild.
+
+After initial setup, every code change ships with a single git redeploy:
+
+```
+PUT /api/stacks/{id}/git/redeploy?endpointId={endpointId}
+{
+  "RepositoryReferenceName": "refs/heads/master",
+  "RepositoryAuthentication": false,
+  "PullImage": true,
+  "Prune": false
+}
+```
+
+> Note: an upstream reverse proxy may return HTTP 504 on long builds — the build still completes server-side. Poll `GET /api/stacks/{id}` and watch `GitConfig.ConfigHash` update to the new commit SHA.
 
 ---
 
@@ -113,6 +147,14 @@ uvicorn microservice:app --host 0.0.0.0 --port 8000
 
 Drop any PNG into the `backgrounds/` folder — picked up on next restart, sorted alphabetically, no limit.
 
+### Teams Backgrounds (optional)
+
+8 SVG templates live in `tbg/`. Each contains `{{DisplayName}}` and `{{JobTitle}}` placeholders that are replaced at render time with values from Microsoft Entra. Render is via `cairosvg` to PNG.
+
+To add a new Teams template: drop an SVG into `tbg/` containing those placeholders.
+
+The Microsoft Graph app registration needs the application permission **`User.Read.All`** (admin-consented) so it can resolve users by email.
+
 ---
 
 ## Configuration (`.env`)
@@ -126,30 +168,53 @@ Drop any PNG into the `backgrounds/` folder — picked up on next restart, sorte
 | `RATE_LIMIT_MAX_REQUESTS` | `5` | Max requests per window per email |
 | `RATE_LIMIT_WINDOW_MINUTES` | `1` | Rate limit window |
 | `JOB_EXPIRY_MINUTES` | `10` | How long job records stay in memory |
+| `GRAPH_TENANT_ID` | *(empty)* | Entra tenant ID — required for Teams BG |
+| `GRAPH_CLIENT_ID` | *(empty)* | App registration client ID — required for Teams BG |
+| `GRAPH_CLIENT_SECRET` | *(empty)* | App registration client secret — required for Teams BG |
+| `GRAPH_TIMEOUT_SECONDS` | `15` | HTTP timeout for Graph requests |
 
 Switching `REMBG_MODEL` only requires a container restart — no rebuild needed (both models are pre-downloaded in the image).
+
+Graph access tokens are cached in-memory with a TTL slightly shorter than Microsoft's stated `expires_in`, and any 401 from Graph triggers a one-shot forced refresh + retry — see `graph_client.py`.
 
 ---
 
 ## Test
 
 ```bash
-# Submit
+# Submit a photo (no Teams BG)
 curl -X POST http://localhost:8002/process-image/ \
   -H "Authorization: Bearer <TOKEN>" \
   -F "file=@photo.jpg" \
   -F "name=John Smith" \
   -F "email=john@example.com"
 
+# Submit + generate Teams backgrounds
+curl -X POST http://localhost:8002/process-image/ \
+  -H "Authorization: Bearer <TOKEN>" \
+  -F "file=@photo.jpg" \
+  -F "name=John Smith" \
+  -F "email=john@example.com" \
+  -F "tbg=true"
+
 # Poll
 curl http://localhost:8002/status/<job_id> \
   -H "Authorization: Bearer <TOKEN>"
 
-# Download result
+# Download a result
 curl http://localhost:8002/images/john/JohnSmith-01.png -o result.png
 ```
 
 A PowerShell script (`Submit-Photo.ps1`) is available separately — submits a photo and downloads all results to `Downloads\company-bg\`.
+
+### Unit tests
+
+```bash
+pip install pytest
+pytest tests/
+```
+
+Covers the Microsoft Graph token cache (TTL-aware, force-refresh, 401-retry, and a regression guard against re-adding `@lru_cache` to `get_access_token`).
 
 ---
 
@@ -160,8 +225,13 @@ company-bg/
 ├── microservice.py      # FastAPI app — auth, rate limiting, async jobs, scheduler
 ├── processor.py         # Image pipeline (face detection, compositing, alpha cleanup)
 ├── rembg_worker.py      # Isolated subprocess for AI background removal
+├── graph_client.py      # Microsoft Graph client (TTL-cached token + 401 retry)
+├── tbg_processor.py     # Teams background SVG templating + render
 ├── backgrounds/         # PNG backgrounds — add as many as you want
+├── tbg/                 # Teams background SVG templates
+├── tests/               # pytest suite (Graph client behavior)
 ├── out_images/          # Generated outputs (auto-cleaned, not in repo)
+├── docs/                # Design docs (TECHNICAL_PLAN_TBG_ENTRA.md)
 ├── Dockerfile
 ├── docker-compose.yml
 ├── requirements.txt
@@ -176,4 +246,6 @@ company-bg/
 - **OpenCV** — face detection
 - **Pillow** — image compositing and alpha processing
 - **APScheduler** — periodic cleanup
+- **cairosvg** — SVG → PNG for Teams backgrounds
+- **requests** — Microsoft Graph HTTP client
 - **python-dotenv** — config management
