@@ -19,16 +19,17 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy application code and backgrounds
+# Pre-download both rembg models BEFORE source COPY so the slow ~1GB download
+# layers stay cached when only Python source changes. Avoids first-request
+# download race condition in production. Switching REMBG_MODEL at runtime
+# needs no rebuild because both models live in the image.
+RUN python3 -c "from rembg import new_session; new_session('birefnet-portrait', providers=['CPUExecutionProvider']); print('birefnet ready')"
+RUN python3 -c "from rembg import new_session; new_session('isnet-general-use'); print('isnet ready')"
+
+# Copy application code and backgrounds (changes here invalidate cache from this layer down)
 COPY microservice.py processor.py rembg_worker.py graph_client.py tbg_processor.py ./
 COPY backgrounds/ ./backgrounds/
 COPY tbg/ ./tbg/
-
-# Pre-download the birefnet-portrait model at build time (~973MB)
-# Avoids first-request download race condition in production
-# Pre-download both models so switching via REMBG_MODEL env var needs no rebuild
-RUN python3 -c "from rembg import new_session; new_session('birefnet-portrait', providers=['CPUExecutionProvider']); print('birefnet ready')"
-RUN python3 -c "from rembg import new_session; new_session('isnet-general-use'); print('isnet ready')"
 
 # Create output directory
 RUN mkdir -p out_images
