@@ -1,4 +1,7 @@
+import logging
 import os
+import threading
+from datetime import datetime, timedelta, timezone
 from functools import lru_cache
 
 import requests
@@ -6,6 +9,9 @@ import requests
 GRAPH_BASE_URL = "https://graph.microsoft.com/v1.0"
 GRAPH_SCOPE = "https://graph.microsoft.com/.default"
 GRAPH_TIMEOUT_SECONDS = int(os.getenv("GRAPH_TIMEOUT_SECONDS", "15"))
+TOKEN_REFRESH_SKEW_SECONDS = 60
+
+logger = logging.getLogger(__name__)
 
 
 class GraphError(Exception):
@@ -42,8 +48,15 @@ def _graph_settings() -> tuple[str, str, str]:
     return tenant_id, client_id, client_secret
 
 
-@lru_cache(maxsize=1)
-def get_access_token() -> str:
+# Hand-rolled token cache with expiry. DO NOT replace with @lru_cache —
+# Graph tokens expire (~1h) and lru_cache has no TTL. Past incident:
+# token cached forever, every call after the first hour failed with
+# "InvalidAuthenticationToken: Lifetime validation failed".
+_token_cache: dict = {"token": None, "expires_at": None}
+_token_lock = threading.Lock()
+
+
+def _fetch_new_token() -> tuple[str, datetime]:
     tenant_id, client_id, client_secret = _graph_settings()
     token_url = f"https://login.microsoftonline.com/{tenant_id}/oauth2/v2.0/token"
 
@@ -65,36 +78,71 @@ def get_access_token() -> str:
 
     data = response.json()
     token = data.get("access_token")
+    expires_in = int(data.get("expires_in", 3600))
     if not token:
         raise GraphAuthError("Microsoft Graph token response did not include access_token.")
 
-    return token
+    expires_at = datetime.now(timezone.utc) + timedelta(
+        seconds=max(60, expires_in - TOKEN_REFRESH_SKEW_SECONDS)
+    )
+    return token, expires_at
+
+
+def get_access_token(force_refresh: bool = False) -> str:
+    with _token_lock:
+        cached = _token_cache["token"]
+        expires_at = _token_cache["expires_at"]
+        if (
+            not force_refresh
+            and cached is not None
+            and expires_at is not None
+            and datetime.now(timezone.utc) < expires_at
+        ):
+            return cached
+
+        token, new_expires_at = _fetch_new_token()
+        _token_cache["token"] = token
+        _token_cache["expires_at"] = new_expires_at
+        logger.info(
+            "Microsoft Graph token refreshed (valid until %s, force_refresh=%s)",
+            new_expires_at.isoformat(timespec="seconds"),
+            force_refresh,
+        )
+        return token
 
 
 def _query_user(filter_expression: str) -> dict | None:
-    token = get_access_token()
-    response = requests.get(
-        f"{GRAPH_BASE_URL}/users",
-        headers={
-            "Authorization": f"Bearer {token}",
-            "Accept": "application/json",
-        },
-        params={
-            "$filter": filter_expression,
-            "$select": "displayName,jobTitle,mail,userPrincipalName",
-            "$top": 1,
-        },
-        timeout=GRAPH_TIMEOUT_SECONDS,
-    )
-
-    if response.status_code != 200:
-        raise GraphRequestError(
-            f"Microsoft Graph user lookup failed ({response.status_code}): {response.text}"
+    for attempt in (0, 1):
+        token = get_access_token(force_refresh=attempt == 1)
+        response = requests.get(
+            f"{GRAPH_BASE_URL}/users",
+            headers={
+                "Authorization": f"Bearer {token}",
+                "Accept": "application/json",
+            },
+            params={
+                "$filter": filter_expression,
+                "$select": "displayName,jobTitle,mail,userPrincipalName",
+                "$top": 1,
+            },
+            timeout=GRAPH_TIMEOUT_SECONDS,
         )
 
-    data = response.json()
-    users = data.get("value", [])
-    return users[0] if users else None
+        if response.status_code == 401 and attempt == 0:
+            logger.warning("Microsoft Graph returned 401 — invalidating token cache and retrying once")
+            continue
+
+        if response.status_code != 200:
+            suffix = " after token refresh" if attempt == 1 else ""
+            raise GraphRequestError(
+                f"Microsoft Graph user lookup failed{suffix} ({response.status_code}): {response.text}"
+            )
+
+        data = response.json()
+        users = data.get("value", [])
+        return users[0] if users else None
+
+    return None  # unreachable: loop either returns or raises
 
 
 def get_user_profile_by_email(email: str) -> dict:
